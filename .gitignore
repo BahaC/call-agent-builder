@@ -1,0 +1,17 @@
+# secrets — API key'ler asla commit edilmez
+env.sh
+env.example
+.env
+
+# Freya / bank yerel durum dosyaları
+.freya-agents.json
+.personas.json
+
+# çalışma çıktıları
+results/
+out/
+traces/*.jsonl
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
