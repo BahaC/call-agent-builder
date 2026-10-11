@@ -230,6 +230,7 @@ def make_tools(spec, api):
     if "verify_identity" in api:
         v = g.get("verify_identity") or {}
         maxw = int(_p(spec, "identity", "max_wrong_total", default=0) or 0)
+        nq = len(_p(spec, "identity", "questions", default=[]) or [])
         body = raw.get("verify_identity") or f"""
 left = d.get('wrong_answers_left')
 err = str(d.get('error') or '').lower()
@@ -238,6 +239,13 @@ wrong = int(vars.get('id_wrong') or 0)
 if ok and str(d.get('verified')).lower() == 'false' and not d.get('hint') and str(d.get('all_verified')).lower() != 'true':
     wrong = wrong + 1
     vars['id_wrong'] = str(wrong)
+# count correct answers ourselves too: after a platform error the bank may answer the last one without all_verified
+good = int(vars.get('id_correct') or 0)
+if ok and str(d.get('verified')).lower() == 'true':
+    good = good + 1
+    vars['id_correct'] = str(good)
+if {nq} > 0 and good >= {nq}:
+    d['all_verified'] = True
 over = (str(left) == '0') or ({maxw} > 0 and wrong >= {maxw}) or any(w in err for w in ('too many', 'no more', 'locked', 'exhausted', 'check over'))
 if str(d.get('all_verified')).lower() == 'true':
     d['what_to_do_next'] = {v.get('all_verified', 'All security answers passed.')!r}
@@ -420,6 +428,7 @@ SPEECH_RULES = """How callers speak (applies to every step):
 - When the caller corrects themselves ("the 21st, sorry, the 20th"), only the corrected value counts.
 - Amounts and dates said in words: convert them to digits yourself.
 - A weekday alone ("Monday") is not yet a date: work out which date from the date facts and say the full date back before you use it. If they named a day number in another turn, put the two together.
+- A message that does not answer your question (small talk, a sentence that stops halfway) is NOT a refusal and NOT a new answer: briefly ask the same question again. Only a clear no counts as a refusal. Never move to the next offer, and never end the call, because the caller digresses.
 - When one message holds an answer AND something else (a complaint, a question, small talk), act on the answer first: if it answers what you asked, call the tool for it now, exactly as if it came alone. Only then reply to the rest. Never ask again for something the caller just gave you.
 - Small talk or a question back: answer in one short sentence, then return to the step you were on.
 - Dates mentioned for other reasons (a wedding, a birthday) are not payment dates.
