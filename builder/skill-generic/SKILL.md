@@ -14,6 +14,7 @@ every rule, sentence, field and value comes from the folder.
 Read first, in this repo: `docs/workflow-format.md`, `docs/tools-and-code.md` (Freya workflow format, verified
 platform behaviour), `builder/lib/wfkit.py` (helpers you must use). `builder/lib/collections_gen.py` shows a
 complete generator built with wfkit; borrow patterns, not content.
+wfkit also has `confirm_gate`, `action_step`, `refusal_global` and `say_end` (read their docstrings).
 
 ## Steps (time budget in the prompt; stay well inside it)
 
@@ -52,7 +53,23 @@ complete generator built with wfkit; borrow patterns, not content.
      error code of the contract, and timeouts. Because a failed HTTP call never reaches the hook, also put the
      failure instructions in the tool description. Keep `retries=0` on writing tools.
    - When a choice must be confirmed by the caller before a writing call (e.g. a new date, a send), the prompt
-     must read the value back and wait for an explicit yes.
+     must read the value back and wait for an explicit yes. Do NOT leave this to the prompt of a step that also holds
+     the writing tool: the call model takes hedged answers ("probably fine", "I guess") as a yes. Build it with
+     structure: (1) the preview/lookup tool's hook stores the finished question in a variable and sets a flag
+     (e.g. `vars['<x>_preview_ready'] = 'yes'`), and its what_to_do_next tells the model to say nothing, because the
+     next step asks; (2) a `var_equals` transition on that flag (first in the list) goes to
+     `confirm_gate(...)` (wfkit): two steps with NO tools that speak the question verbatim, re-ask after any hedged,
+     conditional or unclear answer and lead on only on a plain yes; fill `yes_examples`, `hedge_examples` and
+     `no_examples` with real phrasings in the call language from the documents and example conversations;
+     (3) its yes goes to `action_step(...)` (wfkit), the only step holding the writing tool, which calls it once and
+     follows the hook. Its no goes to the documented "no" line (`say_end`, or back to the main step). Clear the
+     flag in the hook that consumes it so the gate is not re-entered. Use one gate per writing action that needs
+     confirmation (a change, a send).
+   - Requests the agent must refuse at any point of the call (information or actions on another person's account,
+     card or data; anything the documents forbid for security) are a `refusal_global(...)` (wfkit) with the
+     documented refusal sentence and where the caller goes next, so they are caught even after an action is done.
+     Exclude end nodes. Also tell every hook that finishes an action: if the caller asked for something else in
+     the same message, answer that first, then say the closing line.
    - Every conversation step: one job, short task message, the language of the calls, and exits: an `end_node`
      reached after the goodbye. Keep max_node_turns generous.
    - Request bodies: wfkit builds flat body leaves. If the contract wraps fields in an envelope object, send the

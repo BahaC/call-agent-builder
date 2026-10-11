@@ -464,3 +464,75 @@ def _no_braces(code):
         raise ValueError("code contains '{{' or '}}', which the platform may treat as a placeholder. "
                          "Use dict() instead of nested dict literals and build strings without double braces.")
     return code
+
+
+# --------------------------------------------------------------------------- confirmation gate, refusals
+
+def say_end(name, text, fn=None):
+    """An end node that speaks `text` (fixed, in the call language) and then ends the call."""
+    n = end_node(name)
+    n["terminal"]["function"]["name"] = fn or (name + "_closed")
+    n["terminal"]["function"]["parameters"]["properties"] = {
+        "message_mode": {"type": "string", "default": "custom"},
+        "spoken_message": {"type": "string", "default": text}}
+    return n
+
+
+def confirm_gate(name, question, reask, yes_target, no_target, *, yes_examples, hedge_examples, no_examples,
+                 facts="", giveup_target=None, max_turns=6):
+    """Two conversation nodes that ask for an explicit yes BEFORE a writing action. They have NO tools, so a
+    hedged answer can never trigger the action: only the routing model's 'clear yes' transition leads on.
+
+    question: the read-back + confirmation question, spoken verbatim on entry ({{var}} allowed).
+    reask:    the short question spoken again after a hedged/unclear answer (e.g. "Onaylıyor musunuz?").
+    yes_target: a node that performs the action (see action_step). no_target: where a no goes.
+    *_examples: short lists of real phrasings in the call language, taken from the documents.
+    Returns a dict {name: node, name + "_again": node} to merge into the nodes dict.
+    Route into `name` with a variable transition set by the hook of the preview tool (same turn)."""
+    again = name + "_again"
+    hedge = ("The caller's last message is NOT a plain yes: it hesitates, guesses, adds a condition or a 'but', "
+             "asks a question, or is unclear (for example: " + "; ".join(hedge_examples) + "). "
+             "This applies even when the message also contains a yes word.")
+    yes = ("The caller's last message is a plain, unconditional yes with no hesitation, guess, condition or question "
+           "(for example: " + "; ".join(yes_examples) + ").")
+    no = "The caller declines or cancels (for example: " + "; ".join(no_examples) + ")."
+    routing = ("Judge ONLY the caller's last message. 1) Any hesitation, guess, condition, 'but' or question, even next to "
+               "a yes word, is the hesitant/unclear transition. 2) Only a plain unconditional yes is the yes transition. "
+               "3) A refusal or cancel is the no transition. 4) If the caller talks about something else, choose none.")
+    task = ("You are only waiting for the caller's confirmation. The action has NOT been done yet: never say it is done. "
+            "You have no tool here. If the caller asks a short question, answer it in one sentence from these facts, then "
+            "ask again exactly: \"" + reask + "\". If the caller presses you to just do it, say that you need a clear yes "
+            "first and ask again exactly: \"" + reask + "\"." + (("\nFacts: " + facts) if facts else ""))
+    def trs(hedge_target):
+        return [intent(hedge_target, hedge), intent(yes_target, yes), intent(no_target, no)]
+    n1 = conversation_node(name, task, [], trs(again), on_enter=question, first_entry_only=False,
+                           max_turns=max_turns, max_turn_target=giveup_target or no_target, routing_prompt=routing)
+    n2 = conversation_node(again, task, [], trs(again), on_enter=reask, first_entry_only=False,
+                           max_turns=max_turns, max_turn_target=giveup_target or no_target, routing_prompt=routing)
+    return {name: n1, again: n2}
+
+
+def action_step(name, tool, how, transitions, max_turns=20, max_turn_target=None):
+    """The node a confirm_gate's yes leads to: the model calls `tool` once, right away, then follows the tool
+    hook's what_to_do_next. `how` says which values to send (e.g. "week = {{week_new}}")."""
+    tname = tool["function"]["name"] if "function" in tool else tool.get("name", "the tool")
+    task = ("The caller has just given a clear yes. Call " + tname + " now, exactly once, with " + how + ". "
+            "Say nothing before the call. After the result, follow what_to_do_next word for word. "
+            "Never call " + tname + " a second time in this call.")
+    return conversation_node(name, task, [tool], transitions, on_enter="llm", first_entry_only=True,
+                             max_turns=max_turns, max_turn_target=max_turn_target)
+
+
+def refusal_global(name, when, text, excluded_nodes):
+    """A global interrupt for a request the agent must refuse anywhere in the call (e.g. information or actions on
+    someone else's account). Speaks the fixed `text` (refusal + where the caller goes next) and ends the call.
+    Returns (global_nodes_entry, extra_nodes): put the first in workflow(global_nodes=...), merge the second
+    into nodes, and add name + '_end' to excluded_nodes of other globals."""
+    end_name = name + "_end"
+    g = {"name": name, "node_type": "conversation", "description": when,
+         "condition": {"operator": "matches_intent", "description": when},
+         "task_message": "Say nothing.", "tools": [], "on_enter": {"type": "silent"},
+         "passthrough": True, "passthrough_default_transition": end_name,
+         "excluded_nodes": list(excluded_nodes) + [end_name],
+         "transitions": [always(end_name)]}
+    return {name: g}, {end_name: say_end(end_name, text)}

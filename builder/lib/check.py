@@ -131,6 +131,8 @@ def check_structure(wf, r):
                         r.warn(f"node {k}", f"boolean route on {cc.get('variable')} tests one spelling only")
     # reachability: every node reachable from initial, every node reaches an end
     seen, stack = set(), [wf.get("initial_node")]
+    for gn in (wf.get("global_nodes") or {}).values():  # global nodes can fire from anywhere
+        stack += [tr.get("target_node") for tr in gn.get("transitions") or []] + [gn.get("passthrough_default_transition")]
     while stack:
         x = stack.pop()
         if x in seen or x not in nodes:
