@@ -411,6 +411,7 @@ def main(argv=None):
     ap.add_argument("workflow")
     ap.add_argument("tool_api")
     ap.add_argument("--spec")
+    ap.add_argument("--call-vars", default="", help="comma-separated call variables (when there is no spec)")
     ap.add_argument("--brief", action="append", default=[], help="brief file(s) the spec was made from")
     ap.add_argument("--not-from", action="append", default=[], help="other spec files this spec must not copy sentences from")
     ap.add_argument("--allow-from", action="append", default=[], help="files with generic sentences that may be reused (e.g. the skill)")
@@ -424,7 +425,7 @@ def main(argv=None):
     check_structure(wf, r)
     check_code(wf, r)
     check_tools(wf, api, r)
-    check_variables(wf, r, spec.get("call_variables") or [])
+    check_variables(wf, r, (spec.get("call_variables") or []) + [v for v in a.call_vars.split(",") if v])
     if spec:
         check_spec(wf, spec, r)
         check_result_words(spec, r)

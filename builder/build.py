@@ -1,6 +1,7 @@
 """The builder: one command, a brief in, a phone agent out.
 
     python3 builder/build.py <brief.md> [<more briefs> ...] <tool_api.json> [--slot NAME] [--practice A|B]
+    python3 builder/build.py <case_folder> <service_base_url> [--slot NAME]      (raw client folder + mock URL)
 
   brief(s)      the bank's brief. Several files when one builds on another (base first).
   tool_api      the tool API file that comes with the brief (.json).
@@ -52,7 +53,7 @@ def redact(s):
     return s
 
 
-TEST_LINE = re.compile(r"^\s*(PASS|FAIL) \S|\d+ / \d+ passed|error\(s\)|^SMOKE|^ERROR |AssertionError|DATECHECK|^Traceback")
+TEST_LINE = re.compile(r"^\s*(PASS|FAIL) \S|SMOKE|customer:|agent:|\d+ / \d+ passed|error\(s\)|^SMOKE|^ERROR |AssertionError|DATECHECK|^Traceback")
 
 
 def one_line(s, n=140):
@@ -60,11 +61,11 @@ def one_line(s, n=140):
     return s[:n] + ("..." if len(s) > n else "")
 
 
-async def run_agent(tr, prompt, model, deadline):
+async def run_agent(tr, prompt, model, deadline, skill="build-collections-agent"):
     from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, ToolUseBlock, ToolResultBlock, UserMessage, query
     options = ClaudeAgentOptions(
         cwd=ROOT, model=model,
-        skills=["build-collections-agent"], setting_sources=["project"],
+        skills=[skill], setting_sources=["project"],
         allowed_tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
         permission_mode="dontAsk", max_turns=200,
         env={"BASH_DEFAULT_TIMEOUT_MS": "900000", "BASH_MAX_TIMEOUT_MS": "1200000", "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"},
@@ -115,6 +116,10 @@ def main():
     ap.add_argument("--budget", type=float, default=27.0)
     ap.add_argument("--model", default=os.environ.get("BUILDER_MODEL", "claude-opus-5-5"))
     a = ap.parse_args()
+    dirs = [f for f in a.files if pathlib.Path(f).is_dir()]
+    urls = [f for f in a.files if f.startswith("http://") or f.startswith("https://")]
+    if dirs:
+        return main_case(a, pathlib.Path(dirs[0]).resolve(), urls[0].rstrip("/") if urls else "")
     briefs = [f for f in a.files if not f.endswith(".json")]
     apis = [f for f in a.files if f.endswith(".json")]
     if not briefs or len(apis) != 1:
@@ -185,6 +190,64 @@ def main():
     tr.line(f"EXPORTED {out.relative_to(ROOT)}")
     for l in final.splitlines():
         if re.match(r"(SLOT|WORKFLOW_|AGENT_ID|CHECK|DATECHECK|PRACTICE) ", l.strip()):
+            tr.line("AGENT REPORT " + l.strip())
+    tr.line(f"MODEL CALLS {tr.model_calls} (builder model {a.model})")
+    tr.line(f"END {time.strftime('%Y-%m-%dT%H:%M:%S%z')} total {time.time() - t_start:.0f}s")
+
+
+def main_case(a, folder, base_url):
+    """A folder of raw client documents and the base URL of the client's services (a mock)."""
+    slot = a.slot or "final"
+    fslot = "bb-" + slot
+    t_start = time.time()
+    deadline = t_start + a.budget * 60 - 150
+    tr = Trace(slot)
+    tr.line(f"START {time.strftime('%Y-%m-%dT%H:%M:%S%z')} slot={slot}")
+    tr.line(f"INPUT case_folder={folder} service_url={base_url}")
+    tr.line(f"BUILDER MODEL {a.model}; budget {a.budget} min")
+    for d in ("out", "submission"):
+        (ROOT / d).mkdir(exist_ok=True)
+    skill_dst = ROOT / ".claude" / "skills" / "build-service-agent" / "SKILL.md"
+    skill_dst.parent.mkdir(parents=True, exist_ok=True)
+    skill_dst.write_text((ROOT / "builder" / "skill-generic" / "SKILL.md").read_text())
+    finish_by = time.strftime("%H:%M:%S", time.localtime(deadline - 60))
+    prompt = (
+        "Use the build-service-agent skill to build a phone agent.\n"
+        f"Case folder: {folder}\n"
+        f"Service base URL (the client's services, use it as servers[0].url): {base_url}\n"
+        f"Slot: {slot}  (file names out/{slot}.*)\n"
+        f"Freya save slot: {fslot}  (use it in freya.save_workflow)\n"
+        f"Finish (step 7) before {finish_by} local time; check `date` when unsure.\n"
+    )
+    try:
+        final = asyncio.run(run_agent(tr, prompt, a.model, deadline, skill="build-service-agent"))
+    except Exception as e:
+        tr.line(f"AGENT ERROR: {one_line(redact(str(e)), 400)}")
+        final = ""
+    wf_file = ROOT / "out" / f"{slot}.workflow.json"
+    api_file = ROOT / "out" / f"{slot}.openapi.json"
+    script = ROOT / "out" / f"{slot}_build.py"
+    if not wf_file.exists() and script.exists():
+        tr.line("FALLBACK: no workflow file, running the build script")
+        sh(tr, [sys.executable, str(script)], "build script")
+    if not wf_file.exists():
+        tr.line("FAILED: no workflow was produced")
+        tr.line(f"END {time.strftime('%Y-%m-%dT%H:%M:%S%z')} total {time.time() - t_start:.0f}s")
+        sys.exit(1)
+    if api_file.exists():
+        sh(tr, [sys.executable, "builder/lib/check.py", str(wf_file), str(api_file)], "FINAL STATIC CHECK")
+    import freya
+    wf = json.loads(wf_file.read_text())
+    saved = freya.save_workflow(fslot, wf)
+    tr.line(f"SAVED ON FREYA workflow_id={saved['workflow_id']} agent_id={saved['agent_id']} version={saved.get('version', 1)}")
+    nodes = wf.get("nodes", {})
+    n_tools = len({(t.get('function') or {}).get('name') for n in nodes.values() for t in (n.get('tools') or []) + (n.get('pre_actions') or [])})
+    tr.line(f"CREATED steps={len(nodes)} ({', '.join(nodes)}) tools={n_tools}")
+    out = ROOT / "submission" / f"{slot}.workflow.json"
+    freya.export_workflow(saved["workflow_id"], str(out))
+    tr.line(f"EXPORTED {out.relative_to(ROOT)}")
+    for l in final.splitlines():
+        if re.match(r"(SLOT|WORKFLOW_|AGENT_ID|CHECK|SMOKE) ", l.strip()):
             tr.line("AGENT REPORT " + l.strip())
     tr.line(f"MODEL CALLS {tr.model_calls} (builder model {a.model})")
     tr.line(f"END {time.strftime('%Y-%m-%dT%H:%M:%S%z')} total {time.time() - t_start:.0f}s")

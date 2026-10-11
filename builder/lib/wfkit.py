@@ -32,7 +32,8 @@ def load_openapi(path):
         op = ops.get("post") or next(iter(ops.values()))
         schema = (((op.get("requestBody") or {}).get("content") or {}).get("application/json") or {}).get("schema") or {}
         resp = ((((op.get("responses") or {}).get("200") or {}).get("content") or {}).get("application/json") or {}).get("schema") or {}
-        out[p.strip("/")] = {
+        name = op.get("operationId") or re.sub(r"\W+", "_", p.strip("/"))
+        out[name] = {
             "url": base + p,
             "properties": schema.get("properties", {}),
             "required": schema.get("required", []),
