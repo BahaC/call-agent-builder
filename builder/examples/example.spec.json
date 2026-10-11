@@ -1,0 +1,88 @@
+{
+ "_note": "SHAPE ONLY. A made-up bank (Harbour & Pine Savings) with made-up rules, tool values and sentences, to show the structure of a spec. Nothing in it is from a real brief and nothing in it may be copied: every value, sentence, outcome, rule and holiday of your spec comes from the brief and tool API of your run. It does not match any real tool API and is not meant to run.",
+ "slot": "example-harbour",
+ "sources": ["briefs/harbour-pine.md"],
+ "bank": "Harbour & Pine Savings",
+ "tools_used": ["verify_identity", "get_account", "create_promise", "add_note", "schedule_callback", "transfer_to_agent", "close_call"],
+ "call_variables": ["customer_id", "first_name", "last_name", "title", "now"],
+ "opening_line": "Good day, this is the automated assistant of Harbour & Pine Savings; this conversation is kept on file. May I speak with {{first_name}} {{last_name}}?",
+ "identity": {
+  "questions": [
+   {"field": "postcode", "ask": "the postcode of your home address", "format": "letters and digits, no spaces, upper case"},
+   {"field": "birth_year", "ask": "your year of birth", "format": "four digits"}
+  ],
+  "max_wrong_total": 2
+ },
+ "calendar": {
+  "weekend_days": [5, 6],
+  "holidays": ["2027-03-01", "2027-04-16"]
+ },
+ "named_dates": {
+  "friday_offer": "last_bd_of_week(monday_of(today)) if last_bd_of_week(monday_of(today)) > today else nextbd(today)"
+ },
+ "third_party": {
+  "callback": {
+   "days": {"THE NEXT TWO BUSINESS DAYS (first)": "nextbd(today)", "THE NEXT TWO BUSINESS DAYS (second)": "nextbd(nextbd(today))"},
+   "from": "09:00", "to": "17:30"
+  }
+ },
+ "products": {
+  "types": {
+   "store_card": {"words": "store card number <card_suffix>", "floor_field": "min_due", "floor_name": "minimum due"},
+   "overdraft": {"words": "arranged overdraft", "floor_field": "monthly_minimum", "floor_name": "monthly minimum"}
+  },
+  "debt_intro": "Thank you. This is about your Harbour & Pine accounts.",
+  "debt_sentence": "Your <words> is <days> days behind, with <amount> outstanding.",
+  "floor_offer_sentence": "We could note the <floor_name> of <floor> for now; the remainder stays outstanding."
+ },
+ "bands": [
+  {"name": "mild", "min_days": 1, "max_days": 10, "deadline": "nth_bd(5)", "attempts": 2},
+  {"name": "serious", "min_days": 11, "max_days": 60, "deadline": "nth_bd(3)", "attempts": 1}
+ ],
+ "attempts": [
+  {"n": 1, "amount": "full", "date": "parse_iso(vars.get('friday_offer'))"},
+  {"n": 2, "amount": "floor", "date": "deadline", "bands": ["mild"]}
+ ],
+ "outcomes": [
+  {"outcome": "committed", "reason": null, "when": "a commitment was saved"},
+  {"outcome": "no_commitment", "reason": "declined", "when": "attempts used up"},
+  {"outcome": "no_commitment", "reason": "contested", "when": "customer contests the balance"},
+  {"outcome": "handed_over", "reason": "advisor", "when": "customer insists on a person"},
+  {"outcome": "unverified", "reason": "too_many_wrong", "when": "identity check failed"},
+  {"outcome": "unreachable", "reason": "call_back", "when": "a callback was booked"}
+ ],
+ "fixed_sentences": [
+  {"text": "A confirmation letter will follow by post.", "when": "after a saved commitment"}
+ ],
+ "tool_guidance": {
+  "verify_identity": {
+   "all_verified": "Both checks passed.",
+   "hint": "Ask for the answer again in the form the hint names. This is not a wrong answer.",
+   "exhausted": "The check failed. Say nothing about any account. Suggest visiting a branch, say goodbye and call close_call with outcome unverified, reason too_many_wrong, in one message.",
+   "unreadable": "Not readable; not a wrong answer. Ask again.",
+   "correct": "Correct. Ask the next question.",
+   "wrong": "Wrong. Ask the same question again."
+  },
+  "create_promise": {
+   "ok": "Saved. Say \"A confirmation letter will follow by post.\", then goodbye and close_call with outcome committed, in one message.",
+   "fail": ["Not saved. Say nothing yet; call create_promise again now with the same values.",
+            "Not saved twice. Apologise, say goodbye and call close_call with outcome no_commitment, reason declined."]
+  }
+ },
+ "field_descriptions": {
+  "verify_identity": {"answer": "postcode: upper case, no spaces. birth_year: four digits."}
+ },
+ "prompts": {
+  "system": "<call-wide rules from the brief: role, language, length of turns, tool discipline, what to say to off-topic questions, what never to offer, how every call ends>",
+  "identity": "<who may confirm, what to do with a third person, the security questions in order, refusals, the words that must not be said before verification>",
+  "third_party": "<what a third person may hear, how to agree a callback using {{callback_facts}}, how to close>",
+  "collection_opening": "{{debt_lines}} <the brief's first question>",
+  "collection": "<ACCOUNT FACTS {{account_facts}} / DATE FACTS {{date_facts}} / special situations first / amounts / dates / confirmation and saving / persuasion last>"
+ },
+ "rules": [
+  {"id": "2.1", "text": "opening sentence", "enforced_in": ["node:identity"]},
+  {"id": "5.3", "text": "deadline per band", "enforced_in": ["code:account_prep"]},
+  {"id": "7.2", "text": "retry once on a failed save", "enforced_in": ["tool:create_promise"]}
+ ],
+ "test_variables": {"customer_id": "c_example", "first_name": "Robin", "last_name": "Hale", "title": "Mx", "now": "2027-03-03T10:00"}
+}
