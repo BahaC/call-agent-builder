@@ -536,3 +536,29 @@ def refusal_global(name, when, text, excluded_nodes):
          "excluded_nodes": list(excluded_nodes) + [end_name],
          "transitions": [always(end_name)]}
     return {name: g}, {end_name: say_end(end_name, text)}
+
+
+def list_reader_code():
+    """Python source (no braces) defining read_list(vars, mapped_var, path): returns a list of dicts from a tool
+    result. On Freya a mapped list often does NOT arrive as a list: it can be missing, a JSON string, or flattened
+    into keys like '<node>_response.data.data.cards.0.cardNumber'. read_list tries all three. Paste this into
+    every code node that reads a list: code_node(..., list_reader_code() + your_code, ...)."""
+    return '''
+import json as _json, re as _re
+def read_list(vars, mapped_var, path):
+    v = vars.get(mapped_var)
+    if isinstance(v, str):
+        try:
+            v = _json.loads(v)
+        except Exception:
+            v = None
+    if isinstance(v, list) and v:
+        return [x for x in v if isinstance(x, dict)]
+    found = dict()
+    pat = _re.compile(_re.escape(path) + r'\\.(\\d+)\\.(\\w+)$')
+    for k in list(vars.keys()):
+        m = pat.search(str(k))
+        if m:
+            found.setdefault(int(m.group(1)), dict())[m.group(2)] = vars.get(k)
+    return [found[i] for i in sorted(found)]
+'''

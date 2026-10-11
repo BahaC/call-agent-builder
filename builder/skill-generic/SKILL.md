@@ -42,6 +42,10 @@ wfkit also has `confirm_gate`, `action_step`, `refusal_global` and `say_end` (re
      Map body field `x.y` with `response_mapping` path `data.x.y`. Read results in code from `vars`
      (mapped variable first, flattened keys like `<node>_response.data...` second). Never raise in code;
      write a fallback value for every variable a prompt or condition reads. No `{{` or `}}` in code.
+     LISTS: a mapped list often arrives empty on Freya, as a JSON string, or flattened into keys such as
+     `<node>_response.data.data.cards.0.cardNumber`. Never trust the mapped variable alone: read every list with
+     `read_list(vars, '<mapped var>', '<path of the list>')` from `list_reader_code()` (wfkit). A local test that
+     feeds a real list does not catch this; also test your code with only the flattened keys.
    - Do all decisions that have an exact answer in code: which branch of the flow applies (number of eligible
      items, status values, zero/non-zero amounts, currencies present), date arithmetic from the `now` call
      variable (never the system clock), formatting amounts and dates as the documents say they are read.
